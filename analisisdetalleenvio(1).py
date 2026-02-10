@@ -1,50 +1,102 @@
+import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
+import plotly.express as px
 import string
 
-# 1. CARGA Y PREPARACIÓN DE DATOS
-column_names = list(string.ascii_uppercase[:17])
-df = pd.read_excel('/content/detalle_envio.xlsx', names=column_names, header=0)
-df['O_str'] = df['O'].astype(str).str.replace('.0', '', regex=False)
+# --- CONFIGURACIÓN DEL PANEL ---
+st.set_page_config(page_title="Auditoría Logística Last Mile", layout="wide")
 
-# 2. ANÁLISIS DE REPARTIDORES (MAYORES/MENORES ENTREGAS)
-effective_filter = 'Causa Ajena'
-df_effective = df[df['K'] == effective_filter]
-repartidor_counts = df_effective['H'].value_counts().reset_index()
-repartidor_counts.columns = ['Repartidor', 'Frecuencia']
-repartidor_counts['Porcentaje (%)'] = (repartidor_counts['Frecuencia'] / len(df) * 100).round(2)
+st.title("📦 Panel de Control de Calidad de Reparto")
+st.markdown("Análisis avanzado de incidencias, entregas y densidad por Código Postal.")
 
-top_5_max = repartidor_counts.head(5)
-top_5_min = repartidor_counts.sort_values(by='Frecuencia', ascending=True).head(5)
+# --- 1. CARGA DE DATOS ---
+archivo = st.sidebar.file_uploader("Sube tu reporte Excel (.xlsx)", type=['xlsx'])
 
-# 3. MAPA DE CALOR DE INCIDENCIAS (LO QUE FALTABA)
-incidencias_por_repartidor = df.groupby(['H', 'L']).size().reset_index(name='Cantidad_Incidencias')
-top_15_drivers = incidencias_por_repartidor.groupby('H')['Cantidad_Incidencias'].sum().nlargest(15).index
-heatmap_data = incidencias_por_repartidor[incidencias_por_repartidor['H'].isin(top_15_drivers)]
-pivot_heatmap = heatmap_data.pivot(index='H', columns='L', values='Cantidad_Incidencias').fillna(0)
+if archivo:
+    # Definimos nombres de columnas estándar (A-Q)
+    column_names = list(string.ascii_uppercase[:17])
+    
+    try:
+        # Leemos el archivo cargado directamente (Sin rutas de Colab)
+        df = pd.read_excel(archivo, names=column_names, header=0)
+        
+        # Limpieza de datos
+        df['O_str'] = df['O'].astype(str).str.replace('.0', '', regex=False)
+        
+        # --- 2. PROCESAMIENTO: LÓGICA DE ÉXITO (ENTREGADO / EFECTIVIDAD) ---
+        # Conteo total por repartidor (Columna H)
+        repartidor_counts = df['H'].value_counts().reset_index()
+        repartidor_counts.columns = ['Repartidor', 'Total_Envios']
+        
+        # Filtro flexible para Entregas Exitosas (Columna L)
+        # Busca ambas palabras sin importar mayúsculas o espacios
+        exitos_mask = (
+            df['L'].astype(str).str.contains('entregado', na=False, case=False) | 
+            df['L'].astype(str).str.contains('efectividad', na=False, case=False)
+        )
+        df_exitos = df[exitos_mask]
+        
+        exitos_counts = df_exitos['H'].value_counts().reset_index()
+        exitos_counts.columns = ['Repartidor', 'Entregas_Exitosas']
+        
+        # Unimos las métricas
+        resumen = pd.merge(repartidor_counts, exitos_counts, on='Repartidor', how='left').fillna(0)
+        resumen['Efectividad_%'] = (resumen['Entregas_Exitosas'] / resumen['Total_Envios'] * 100).round(2)
 
-plt.figure(figsize=(16, 10))
-sns.heatmap(pivot_heatmap, annot=True, fmt='g', cmap='YlGnBu')
-plt.title('Mapa de Calor: Incidencias por Repartidor')
-plt.tight_layout()
-plt.savefig('heatmap_incidencias.png')
+        # --- 3. DASHBOARD INTERACTIVO ---
+        
+        # KPIs Superiores
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Volumen Total", len(df))
+        c2.metric("Total Entregados", int(resumen['Entregas_Exitosas'].sum()))
+        c3.metric("Efectividad Media", f"{resumen['Efectividad_%'].mean():.1f}%")
 
-# 4. CORRELACIÓN VOLUMEN VS DENSIDAD
-cp_counts = df['O_str'].value_counts().reset_index()
-cp_counts.columns = ['Codigo_Postal', 'Envios']
-low_perf_drivers = top_5_min['Repartidor'].unique()
-df_low_perf = df[df['H'].isin(low_perf_drivers)]
-driver_density = df_low_perf.groupby(['H', 'O_str']).size().reset_index(name='Envios_Repartidor')
-comparison_df = driver_density.merge(cp_counts, left_on='O_str', right_on='Codigo_Postal', how='left')
+        st.divider()
 
-plt.figure(figsize=(10, 6))
-sns.scatterplot(data=comparison_df, x='Envios', y='Envios_Repartidor', hue='H')
-plt.title('Correlación: Volumen vs Densidad de Zona')
-plt.savefig('correlacion_densidad.png')
+        # GRÁFICO 1: COMPARATIVA VOLUMEN VS ÉXITO
+        st.subheader("🏎️ Rendimiento por Repartidor")
+        fig_repa = px.bar(
+            resumen.sort_values('Total_Envios', ascending=False), 
+            x='Repartidor', 
+            y=['Total_Envios', 'Entregas_Exitosas'],
+            barmode='group',
+            color_discrete_map={'Total_Envios': '#34495e', 'Entregas_Exitosas': '#27ae60'},
+            text_auto=True
+        )
+        st.plotly_chart(fig_repa, use_container_width=True)
 
-# 5. PRODUCTO DOMINANTE POR CP
-dominant_products = df.groupby(['O_str', 'M']).size().reset_index(name='Cantidad')
-dominant_per_cp = dominant_products.sort_values(['O_str', 'Cantidad'], ascending=[True, False]).drop_duplicates(subset='O_str')
+        # GRÁFICO 2: MAPA DE CALOR DE INCIDENCIAS
+        st.subheader("🔥 Mapa de Incidencias (Top 15 Repartidores)")
+        incidencias = df.groupby(['H', 'L']).size().reset_index(name='Cantidad')
+        top_15 = incidencias.groupby('H')['Cantidad'].sum().nlargest(15).index
+        heatmap_data = incidencias[incidencias['H'].isin(top_15)]
+        
+        fig_heat = px.density_heatmap(
+            heatmap_data, x="L", y="H", z="Cantidad",
+            color_continuous_scale='YlOrRd', text_auto=True
+        )
+        st.plotly_chart(fig_heat, use_container_width=True)
 
-print('Script completo generado. Se han guardado también los gráficos como imágenes PNG.')
+        # GRÁFICO 3: CORRELACIÓN DENSIDAD
+        st.subheader("📍 Correlación: Envíos por Zona vs Repartidor")
+        cp_vol = df['O_str'].value_counts().reset_index()
+        cp_vol.columns = ['O_str', 'Total_Zona']
+        
+        corr_data = df.groupby(['H', 'O_str']).size().reset_index(name='Envios_Repa').merge(cp_vol, on='O_str')
+        
+        fig_corr = px.scatter(
+            corr_data, x='Total_Zona', y='Envios_Repa', color='H',
+            hover_data=['O_str'], size='Envios_Repa'
+        )
+        st.plotly_chart(fig_corr, use_container_width=True)
+
+        # TABLA DE DATOS
+        with st.expander("Ver Ranking Detallado"):
+            st.dataframe(resumen.sort_values('Efectividad_%', ascending=False), use_container_width=True)
+
+    except Exception as e:
+        st.error(f"Error procesando el archivo: {e}")
+        st.info("Revisa que el Excel no tenga filas vacías al principio.")
+
+else:
+    st.info("👋 Sube tu archivo Excel en el menú lateral para generar la auditoría.")
