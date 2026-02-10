@@ -30,7 +30,7 @@ if uploaded_file is not None:
         st.subheader('Rendimiento por Repartidor')
         effective_filter = 'Causa Ajena'
         df_eff = df[df['L'] == effective_filter]
-        rep_counts = df_eff['H'].value_counts().reset_index(name='Entregado,Efectividad')
+        rep_counts = df_eff['H'].value_counts().reset_index(name='Efectividad')
         rep_counts.columns = ['Repartidor', 'Frecuencia']
         
         st.write('Top 5 Repartidores con Mayores Entregas')
