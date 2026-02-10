@@ -10,9 +10,12 @@ import io
 st.set_page_config(page_title='Dashboard Logístico', layout='wide')
 st.title('📊 Dashboard de Auditoría Logística')
 
-# --- CARGA DE ARCHIVO ---
+# --- CARGA DE ARCHIVO Y FILTROS ---
 st.sidebar.header('Configuración')
 uploaded_file = st.sidebar.file_uploader('Cargar archivo Excel (detalle_envio.xlsx)', type=['xlsx'])
+
+# Filtro de cantidad para los rankings
+top_n = st.sidebar.slider('Seleccionar Top para Rankings', min_value=3, max_value=20, value=5)
 
 if uploaded_file is not None:
     # 1. Preparación de datos
@@ -31,30 +34,32 @@ if uploaded_file is not None:
 
     st.markdown('### 📈 Resumen Operativo Global')
     c1, c2, c3 = st.columns(3)
-    c1.metric('Total Envíos', f"{total_envios} paq.")
-    c2.metric('Entregas Exitosas', f"{total_exitos} paq.")
+    c1.metric('Total Envíos', f"{total_envios} env.")
+    c2.metric('Envíos Entregados', f"{total_exitos} env.")
     c3.metric('Efectividad Global', f"{efectividad_global:.1f}%")
     st.progress(efectividad_global / 100)
     st.divider()
 
-    # --- PESTAÑAS ---
     tab1, tab2, tab3 = st.tabs(['🚚 Repartidores', '📍 Geografía (CP)', '⚠️ Incidencias'])
 
     with tab1:
         st.subheader('Rendimiento por Repartidor')
-        # CORRECCIÓN AQUÍ: Usamos reset_index(name=...) para evitar el error de la foto
         rep_total = df['H'].value_counts().reset_index()
         rep_total.columns = ['Repartidor', 'Total']
         
         rep_exitos = df[mask_exito]['H'].value_counts().reset_index()
         rep_exitos.columns = ['Repartidor', 'Exitos']
         
-        # Unión segura por la columna 'Repartidor'
         resumen_repa = pd.merge(rep_total, rep_exitos, on='Repartidor', how='left').fillna(0)
+        
+        # CÁLCULO DE PORCENTAJES
         resumen_repa['% Efectividad'] = (resumen_repa['Exitos'] / resumen_repa['Total'] * 100).round(1)
+        resumen_repa['% Incidencias'] = (100 - resumen_repa['% Efectividad']).round(1)
+        
+        resumen_repa = resumen_repa[['Repartidor', 'Total', 'Exitos', '% Efectividad', '% Incidencias']]
         
         st.dataframe(resumen_repa.sort_values('% Efectividad', ascending=False), use_container_width=True)
-        st.bar_chart(resumen_repa.head(10).set_index('Repartidor')[['Total', 'Exitos']])
+        st.bar_chart(resumen_repa.head(top_n).set_index('Repartidor')[['Total', 'Exitos']])
 
     with tab2:
         st.subheader('Distribución por Código Postal')
@@ -64,47 +69,51 @@ if uploaded_file is not None:
         
         fig_cp = px.bar(cp_counts.head(15), x='CP', y='Cantidad',
                         text=cp_counts.head(15)['Porcentaje'].apply(lambda x: f'{x}%'),
-                        color='Cantidad', color_continuous_scale='Blues',
-                        labels={'CP': 'Código Postal', 'Cantidad': 'Envíos'})
+                        color='Cantidad', color_continuous_scale='Blues')
         fig_cp.update_traces(textposition='outside')
-        fig_cp.update_layout(xaxis_type='category')
         st.plotly_chart(fig_cp, use_container_width=True)
 
     with tab3:
-        st.subheader('🔥 Mapa de Calor de Incidencias')
+        st.subheader(f'🔥 Análisis de Extremos (Top {top_n})')
         
         inc_data = df.groupby(['H', 'L']).size().reset_index(name='Count')
         pivot_inc = inc_data.pivot(index='H', columns='L', values='Count').fillna(0)
         
-        # Vinculamos la efectividad calculada antes
-        rep_efectividad = resumen_repa.set_index('Repartidor')['% Efectividad']
+        col_exito = next((c for c in pivot_inc.columns if "entregado" in str(c).lower() or "efectividad" in str(c).lower()), None)
         
-        col_order = pivot_inc.sum(axis=0).sort_values(ascending=False).index
-        pivot_inc = pivot_inc[col_order]
+        rep_stats = resumen_repa.set_index('Repartidor')[['% Efectividad', '% Incidencias']]
+        full_pivot = pivot_inc.merge(rep_stats, left_index=True, right_index=True, how='left').fillna(0)
         
-        # Insertar Efectividad a la izquierda de forma robusta
-        pivot_inc = pivot_inc.merge(rep_efectividad, left_index=True, right_index=True, how='left').fillna(0)
-        # Reordenar para que la columna de % esté la primera
-        cols = ['% Efectividad'] + [c for c in pivot_inc.columns if c != '% Efectividad']
-        pivot_inc = pivot_inc[cols]
+        cols_verdes = ['% Efectividad'] + ([col_exito] if col_exito else [])
+        cols_rojas = ['% Incidencias'] + [c for c in pivot_inc.columns if c != col_exito]
         
-        # Ordenar filas por incidencias (sin contar la columna de %)
-        pivot_inc['Total_Inc'] = pivot_inc.iloc[:, 1:].sum(axis=1)
-        pivot_inc = pivot_inc.sort_values('Total_Inc', ascending=False).drop(columns='Total_Inc')
+        inc_reales = [c for c in pivot_inc.columns if c != col_exito]
+        full_pivot['Total_Inc_Count'] = full_pivot[inc_reales].sum(axis=1)
+        
+        orden_final_cols = cols_verdes + cols_rojas
+        
+        col_peores, col_mejores = st.columns(2)
 
-        fig_heat, ax_heat = plt.subplots(figsize=(12, 8))
-        sns.heatmap(pivot_inc.head(20), annot=True, fmt='g', cmap='YlOrRd', ax=ax_heat, linewidths=.5)
-        plt.title('Top 20 Repartidores: Efectividad vs Incidencias')
-        plt.xticks(rotation=45, ha='right')
-        st.pyplot(fig_heat)
+        def draw_split_heatmap(data, title, ax):
+            sns.heatmap(data[cols_rojas], annot=True, fmt='g', cmap='YlOrRd', ax=ax, cbar=False, linewidths=.5)
+            sns.heatmap(data[cols_verdes], annot=True, fmt='g', cmap='Greens', ax=ax, cbar=False, linewidths=.5)
+            ax.set_title(title)
+            plt.xticks(rotation=45, ha='right')
 
-        buf = io.BytesIO()
-        fig_heat.savefig(buf, format="png", bbox_inches='tight')
-        st.download_button(label="📥 Descargar Mapa de Calor (PNG)", 
-                           data=buf.getvalue(), 
-                           file_name="incidencias.png", 
-                           mime="image/png")
+        with col_peores:
+            st.error(f"🚨 Top {top_n} con MÁS Incidencias")
+            peores_df = full_pivot.sort_values('Total_Inc_Count', ascending=False).head(top_n)[orden_final_cols]
+            fig_p, ax_p = plt.subplots(figsize=(10, 6))
+            draw_split_heatmap(peores_df, "Focos de Error", ax_p)
+            st.pyplot(fig_p)
+
+        with col_mejores:
+            st.success(f"✅ Top {top_n} con MENOS Incidencias")
+            mejores_df = full_pivot.sort_values('Total_Inc_Count', ascending=True).head(top_n)[orden_final_cols]
+            fig_m, ax_m = plt.subplots(figsize=(10, 6))
+            draw_split_heatmap(mejores_df, "Líderes de Eficiencia", ax_m)
+            st.pyplot(fig_m)
 
 else:
-    st.info('👋 Por favor, sube el archivo Excel para empezar.')
+    st.info('👋 Sube el archivo Excel para activar los filtros y rankings.')
 
