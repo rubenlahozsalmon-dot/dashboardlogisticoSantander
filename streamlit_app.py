@@ -14,8 +14,11 @@ st.title('📊 Dashboard de Auditoría Logística')
 st.sidebar.header('Configuración')
 uploaded_file = st.sidebar.file_uploader('Cargar archivo Excel', type=['xlsx'])
 
-# Este filtro solo se aplicará al Tab 1
-top_n_repa = st.sidebar.slider('Repartidores a mostrar en Tab 1', min_value=5, max_value=30, value=10)
+st.sidebar.subheader('Filtros de Visualización')
+# Filtro para Tab 1
+top_n_repa = st.sidebar.slider('Repartidores a mostrar (Tab 1)', min_value=5, max_value=30, value=10)
+# Filtro para Tab 2 (Nuevo solicitado)
+top_n_cp = st.sidebar.slider('Códigos Postales a mostrar (Tab 2)', min_value=5, max_value=50, value=10)
 
 if uploaded_file is not None:
     # 1. Preparación de datos
@@ -61,42 +64,35 @@ if uploaded_file is not None:
         st.dataframe(resumen_filtrado, use_container_width=True)
         st.bar_chart(resumen_filtrado.set_index('Repartidor')[['Total', 'Exitos']])
 
-    # --- TAB 2: GEOGRAFÍA (TODOS LOS CP CON DOBLE ETIQUETA) ---
+    # --- TAB 2: GEOGRAFÍA (CON FILTRO TOP N) ---
     with tab2:
-        st.subheader('📍 Distribución Completa por Código Postal')
+        st.subheader(f'📍 Top {top_n_cp} Códigos Postales con más envíos')
         cp_counts = df['CP_Limpio'].value_counts().reset_index()
         cp_counts.columns = ['CP', 'Cantidad']
         
-        # Calcular Porcentaje
+        # Calcular Porcentaje y Etiqueta
         cp_counts['Porcentaje'] = (cp_counts['Cantidad'] / total_envios * 100).round(1)
-        
-        # Crear la etiqueta combinada: "Valor | %"
         cp_counts['Etiqueta'] = cp_counts.apply(lambda x: f"{int(x['Cantidad'])} | {x['Porcentaje']}%", axis=1)
         
-        # Gráfico con TODOS los CP y etiquetas personalizadas
+        # APLICAR FILTRO TOP N
+        cp_filtrados = cp_counts.head(top_n_cp)
+        
         fig_cp = px.bar(
-            cp_counts, 
+            cp_filtrados, 
             x='CP', 
             y='Cantidad',
-            text='Etiqueta', # Usamos la nueva columna combinada
+            text='Etiqueta',
             color='Cantidad', 
             color_continuous_scale='Blues',
             labels={'CP': 'Código Postal', 'Cantidad': 'Nº Envíos'}
         )
         
-        # Ajustes visuales para que las etiquetas se lean bien
         fig_cp.update_traces(textposition='outside', textfont_size=12)
-        fig_cp.update_layout(
-            xaxis_type='category',
-            uniformtext_minsize=8, 
-            uniformtext_mode='hide',
-            height=600
-        )
+        fig_cp.update_layout(xaxis_type='category', height=600)
         
         st.plotly_chart(fig_cp, use_container_width=True)
-        st.info(f"Se están analizando {len(cp_counts)} códigos postales diferentes.")
 
-    # --- TAB 3: AUDITORÍA (IGUAL QUE ANTES) ---
+    # --- TAB 3: AUDITORÍA (TODOS LOS REPARTIDORES) ---
     with tab3:
         st.subheader('🔥 Auditoría General de Incidencias')
         inc_data = df.groupby(['H', 'L']).size().reset_index(name='Cant')
