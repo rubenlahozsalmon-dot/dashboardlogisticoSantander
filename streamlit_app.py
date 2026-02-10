@@ -1,7 +1,5 @@
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
 import string
 
 st.set_page_config(page_title='Dashboard Logístico', layout='wide')
@@ -28,25 +26,38 @@ if uploaded_file is not None:
 
     with tab1:
         st.subheader('Rendimiento por Repartidor')
-        effective_filter = 'Entregado, Efectividad'
-        df_eff = df[df['L'] == effective_filter]
-        rep_counts = df_eff['H'].value_counts().reset_index(name='Efectividad')
-        rep_counts.columns = ['Repartidor', 'Frecuencia']
         
-        st.write('Top 5 Repartidores con Mayores Entregas')
-        st.dataframe(rep_counts.head(5))
+        # --- CORRECCIÓN AQUÍ: FILTRO FLEXIBLE ---
+        # Buscamos filas que contengan 'entregado' O 'efectividad' (sin importar mayúsculas)
+        mask_exito = (df['L'].astype(str).str.contains('entregado', case=False, na=False) | 
+                      df['L'].astype(str).str.contains('efectividad', case=False, na=False))
         
-        fig, ax = plt.subplots()
-        sns.barplot(data=rep_counts.head(5), x='Frecuencia', y='Repartidor', ax=ax, palette='viridis')
-        st.pyplot(fig)
+        df_eff = df[mask_exito]
+        
+        if not df_eff.empty:
+            rep_counts = df_eff['H'].value_counts().reset_index()
+            rep_counts.columns = ['Repartidor', 'Frecuencia']
+            
+            st.write('Top 5 Repartidores con Mayores Entregas (Éxito)')
+            st.dataframe(rep_counts.head(5))
+            
+            # Gráfico nativo de Streamlit (más rápido y limpio)
+            st.bar_chart(rep_counts.head(10).set_index('Repartidor'))
+        else:
+            st.warning("No se encontraron registros con 'Entregado' o 'Efectividad' en la columna L.")
 
     with tab2:
         st.subheader('Distribución por Código Postal')
-        cp_dens = df['CP_Limpio'].value_counts().reset_index(name='Densidad')
+        cp_dens = df['CP_Limpio'].value_counts().reset_index()
         cp_dens.columns = ['CP', 'Densidad']
         st.bar_chart(cp_dens.head(15).set_index('CP'))
 
     with tab3:
+        # Nota: Para el Mapa de calor seguimos usando matplotlib/seaborn 
+        # Asegúrate de tenerlos en tu requirements.txt
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+        
         st.subheader('Mapa de Calor de Incidencias')
         inc_data = df.groupby(['H', 'L']).size().reset_index(name='Count')
         top_reps = inc_data.groupby('H')['Count'].sum().nlargest(15).index
@@ -58,6 +69,8 @@ if uploaded_file is not None:
 
     with tab4:
         st.subheader('Propuesta de Micro-Hubs')
+        cp_dens = df['CP_Limpio'].value_counts().reset_index()
+        cp_dens.columns = ['CP', 'Densidad']
         hub_data = cp_dens.head(15).copy()
         hub_data['Prefijo'] = hub_data['CP'].str[:3]
         micro_hubs = hub_data.loc[hub_data.groupby('Prefijo')['Densidad'].idxmax()]
