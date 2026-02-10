@@ -13,17 +13,20 @@ st.title('📊 Dashboard de Auditoría Logística')
 # --- BARRA LATERAL ---
 st.sidebar.header('Configuración')
 uploaded_file = st.sidebar.file_uploader('Cargar archivo Excel', type=['xlsx'])
+
+# Solo dejamos el filtro de repartidores para el Tab 1
 top_n_repa = st.sidebar.slider('Repartidores a mostrar (Tab 1)', min_value=5, max_value=30, value=10)
-top_n_cp = st.sidebar.slider('Códigos Postales a mostrar (Tab 2)', min_value=5, max_value=50, value=10)
 
 if uploaded_file is not None:
     # 1. Preparación de datos
     column_names = list(string.ascii_uppercase[:17])
     df = pd.read_excel(uploaded_file, names=column_names, header=0)
     
+    # Limpieza de datos
     df['CP_Limpio'] = df['O'].astype(str).str.replace('.0', '', regex=False).str.strip()
     df['H'] = df['H'].astype(str).str.strip()
     
+    # Filtro de éxito
     mask_exito = (df['L'].astype(str).str.contains('entregado', case=False, na=False) | 
                   df['L'].astype(str).str.contains('efectividad', case=False, na=False))
     
@@ -39,7 +42,7 @@ if uploaded_file is not None:
     c3.metric('Efectividad Global', f"{efectividad_global:.1f}%")
     st.divider()
 
-    tab1, tab2, tab3 = st.tabs(['🚚 Repartidores', '📍 Geografía (CP)', '⚠️ Auditoría de Incidencias'])
+    tab1, tab2, tab3 = st.tabs(['🚚 Repartidores', '📍 Geografía (Top 5 CP)', '⚠️ Auditoría de Incidencias'])
 
     # --- TAB 1: REPARTIDORES ---
     with tab1:
@@ -55,37 +58,48 @@ if uploaded_file is not None:
         st.dataframe(resumen_filtrado, use_container_width=True)
         st.bar_chart(resumen_filtrado.set_index('Repartidor')[['Total', 'Exitos']])
 
-    # --- TAB 2: GEOGRAFÍA ---
+    # --- TAB 2: GEOGRAFÍA (FIJO TOP 5) ---
     with tab2:
+        st.subheader('📍 Top 5 Códigos Postales con Mayor Volumen')
         cp_counts = df['CP_Limpio'].value_counts().reset_index()
         cp_counts.columns = ['CP', 'Cantidad']
+        
+        # Calcular Porcentaje y Etiqueta
         cp_counts['Porcentaje'] = (cp_counts['Cantidad'] / total_envios * 100).round(1)
         cp_counts['Etiqueta'] = cp_counts.apply(lambda x: f"{int(x['Cantidad'])} | {x['Porcentaje']}%", axis=1)
         
-        fig_cp = px.bar(cp_counts.head(top_n_cp), x='CP', y='Cantidad', text='Etiqueta', color='Cantidad', color_continuous_scale='Blues')
+        # FIJAMOS EL TOP 5
+        cp_top5 = cp_counts.head(5)
+        
+        fig_cp = px.bar(
+            cp_top5, 
+            x='CP', 
+            y='Cantidad', 
+            text='Etiqueta', 
+            color='Cantidad', 
+            color_continuous_scale='Blues',
+            labels={'CP': 'Código Postal', 'Cantidad': 'Envíos'}
+        )
         fig_cp.update_traces(textposition='outside')
+        fig_cp.update_layout(xaxis_type='category')
         st.plotly_chart(fig_cp, use_container_width=True)
 
-    # --- TAB 3: AUDITORÍA (CON EL TOTALIZADO SOLICITADO) ---
+    # --- TAB 3: AUDITORÍA (CON TOTALIZADO) ---
     with tab3:
         st.subheader('🔥 Auditoría General de Incidencias')
         
-        # 1. Pivotar motivos de incidencia
         inc_data = df.groupby(['H', 'L']).size().reset_index(name='Cant')
         pivot_inc = inc_data.pivot(index='H', columns='L', values='Cant').fillna(0)
         
-        # 2. Calcular el TOTAL de incidencias (sumando las columnas del pivote)
-        # Nota: Esto suma todos los motivos que aparecen en la columna 'L'
-        pivot_inc['TOTAL_INCIDENCIAS'] = pivot_inc.sum(axis=1)
+        # Columnas para el totalizado (excluyendo lo que huela a éxito si lo hay en la columna L)
+        cols_inc = [c for c in pivot_inc.columns if not ("entregado" in str(c).lower() or "efectividad" in str(c).lower())]
+        pivot_inc['TOTAL_INCIDENCIAS'] = pivot_inc[cols_inc].sum(axis=1)
         
-        # 3. Unir con porcentajes generales
         rep_stats = resumen_repa.set_index('Repartidor')[['% Efectividad', '% Incidencias']]
         auditoria_total = rep_stats.merge(pivot_inc, left_index=True, right_index=True, how='left').fillna(0)
         
-        # 4. Ordenar de mayor incidencia a menor
         auditoria_total = auditoria_total.sort_values('% Incidencias', ascending=False)
 
-        # 5. Mapa de Calor
         altura = max(8, len(auditoria_total) * 0.4)
         fig_aud, ax_aud = plt.subplots(figsize=(16, altura))
         sns.heatmap(auditoria_total, annot=True, fmt='g', cmap='YlOrRd', ax=ax_aud, linewidths=.5)
