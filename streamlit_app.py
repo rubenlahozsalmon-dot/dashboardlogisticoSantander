@@ -42,10 +42,15 @@ if uploaded_file is not None:
 
     with tab1:
         st.subheader('Rendimiento por Repartidor')
-        rep_total = df['H'].value_counts().reset_index(name='Total')
-        rep_exitos = df[mask_exito]['H'].value_counts().reset_index(name='Exitos')
-        resumen_repa = pd.merge(rep_total, rep_exitos, on='index', how='left').fillna(0)
-        resumen_repa.columns = ['Repartidor', 'Total', 'Exitos']
+        # CORRECCIÓN AQUÍ: Usamos reset_index(name=...) para evitar el error de la foto
+        rep_total = df['H'].value_counts().reset_index()
+        rep_total.columns = ['Repartidor', 'Total']
+        
+        rep_exitos = df[mask_exito]['H'].value_counts().reset_index()
+        rep_exitos.columns = ['Repartidor', 'Exitos']
+        
+        # Unión segura por la columna 'Repartidor'
+        resumen_repa = pd.merge(rep_total, rep_exitos, on='Repartidor', how='left').fillna(0)
         resumen_repa['% Efectividad'] = (resumen_repa['Exitos'] / resumen_repa['Total'] * 100).round(1)
         
         st.dataframe(resumen_repa.sort_values('% Efectividad', ascending=False), use_container_width=True)
@@ -57,7 +62,6 @@ if uploaded_file is not None:
         cp_counts.columns = ['CP', 'Cantidad']
         cp_counts['Porcentaje'] = (cp_counts['Cantidad'] / total_envios * 100).round(1)
         
-        # Gráfico con porcentajes sobre las barras
         fig_cp = px.bar(cp_counts.head(15), x='CP', y='Cantidad',
                         text=cp_counts.head(15)['Porcentaje'].apply(lambda x: f'{x}%'),
                         color='Cantidad', color_continuous_scale='Blues',
@@ -69,32 +73,31 @@ if uploaded_file is not None:
     with tab3:
         st.subheader('🔥 Mapa de Calor de Incidencias')
         
-        # Procesar tabla pivote
         inc_data = df.groupby(['H', 'L']).size().reset_index(name='Count')
         pivot_inc = inc_data.pivot(index='H', columns='L', values='Count').fillna(0)
         
-        # Calcular efectividad individual para la primera columna
+        # Vinculamos la efectividad calculada antes
         rep_efectividad = resumen_repa.set_index('Repartidor')['% Efectividad']
         
-        # Ordenar columnas de incidencias por volumen
         col_order = pivot_inc.sum(axis=0).sort_values(ascending=False).index
         pivot_inc = pivot_inc[col_order]
         
-        # Insertar Efectividad a la izquierda
-        pivot_inc.insert(0, 'EFECTIVIDAD (%)', rep_efectividad)
+        # Insertar Efectividad a la izquierda de forma robusta
+        pivot_inc = pivot_inc.merge(rep_efectividad, left_index=True, right_index=True, how='left').fillna(0)
+        # Reordenar para que la columna de % esté la primera
+        cols = ['% Efectividad'] + [c for c in pivot_inc.columns if c != '% Efectividad']
+        pivot_inc = pivot_inc[cols]
         
-        # Ordenar filas por volumen total de incidencias
+        # Ordenar filas por incidencias (sin contar la columna de %)
         pivot_inc['Total_Inc'] = pivot_inc.iloc[:, 1:].sum(axis=1)
         pivot_inc = pivot_inc.sort_values('Total_Inc', ascending=False).drop(columns='Total_Inc')
 
-        # Dibujar Mapa de Calor
         fig_heat, ax_heat = plt.subplots(figsize=(12, 8))
         sns.heatmap(pivot_inc.head(20), annot=True, fmt='g', cmap='YlOrRd', ax=ax_heat, linewidths=.5)
         plt.title('Top 20 Repartidores: Efectividad vs Incidencias')
         plt.xticks(rotation=45, ha='right')
         st.pyplot(fig_heat)
 
-        # Botón de Descarga
         buf = io.BytesIO()
         fig_heat.savefig(buf, format="png", bbox_inches='tight')
         st.download_button(label="📥 Descargar Mapa de Calor (PNG)", 
@@ -103,5 +106,5 @@ if uploaded_file is not None:
                            mime="image/png")
 
 else:
-    st.info('👋 Por favor, sube el archivo Excel en la barra lateral para generar el reporte.')
+    st.info('👋 Por favor, sube el archivo Excel para empezar.')
 
