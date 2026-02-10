@@ -336,7 +336,7 @@ for i, val in enumerate(top_10_dominant_products['Cantidad']):
 
 plt.tight_layout()
 plt.show()
-lot as plt
+matplotlib
 import seaborn as sns
 
 # 1. Ensure the top_15_cp is sorted descending
