@@ -101,5 +101,16 @@ if uploaded_file is not None:
         fig_aud, ax_aud = plt.subplots(figsize=(16, altura))
         
         # Mapa de calor: Usamos un formato de anotación 'g' para que los totales grandes se lean bien
-        sns.heatmap(auditoria_final,
+        sns.heatmap(auditoria_final, annot=True, fmt='g', cmap='YlOrRd', ax=ax_aud, linewidths=.5)
+        
+        plt.title('Ranking Auditoría: Porcentajes + Desglose + Total Absoluto', fontsize=16)
+        plt.xticks(rotation=45, ha='right')
+        st.pyplot(fig_aud)
 
+        # Botón de descarga
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png", bbox_inches='tight')
+        st.download_button(label="📥 Descargar Auditoría con Totales", data=buf.getvalue(), file_name="auditoria_con_totales.png", mime="image/png")
+
+else:
+    st.info('👋 Sube el archivo Excel para generar la auditoría con totales.')
